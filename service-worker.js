@@ -14,7 +14,7 @@
    >>> "Update" banner.
    ========================================================= */
 
-const CACHE_VERSION = 'v1.2.0';
+const CACHE_VERSION = 'v1.3.0';
 const CACHE_NAME = 'site-inspections-' + CACHE_VERSION;
 
 // The app page is cached as './' (not './index.html'): some hosts, such as
@@ -25,10 +25,13 @@ const APP_FILES = [
   './manifest.json',
   './css/styles.css',
   './js/lib/jspdf.umd.min.js',
+  './js/lib/pdf.min.js',
+  './js/lib/pdf.worker.min.js',
   './js/utils.js',
   './js/db.js',
   './js/settings.js',
   './js/backup.js',
+  './js/drawings.js',
   './js/projects.js',
   './js/visits.js',
   './js/markup.js',

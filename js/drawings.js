@@ -285,21 +285,28 @@ const Drawings = (() => {
   }
 
   /**
-   * Make a zoomed-in snippet of a drawing around a pin, with the marker.
+   * Make a snippet of a drawing with the marker, for the snag screen and the PDF.
+   * If the pin has a saved `view` (the area visible when "Done" was tapped), that
+   * exact area is used. Older pins without a view get an automatic area around the marker.
    * Returns { dataUrl, width, height }.
    */
   function cropAround(img, pin, { outW, aspect = 2, frac = 0.38 } = {}) {
-    // The snippet covers ~38% of the drawing's long side: enough to show the
-    // surrounding rooms and their names, while staying readable when printed.
     const W = img.naturalWidth, H = img.naturalHeight;
-    let cw = Math.min(W, Math.max(W, H) * frac);
-    let ch = cw / aspect;
-    if (ch > H) { ch = H; cw = Math.min(W, ch * aspect); }
-    if (!outW) outW = Math.round(Math.min(cw, 1600));   // no needless downscaling (keeps text sharp)
     const px = pin.x * W, py = pin.y * H;
-    const cx = Math.min(Math.max(0, px - cw / 2), W - cw);
-    const cy = Math.min(Math.max(0, py - ch / 2), H - ch);
-    const outH = Math.round(outW * ch / cw);
+    let cx, cy, cw, ch;
+    if (pin.view && pin.view.w > 0 && pin.view.h > 0) {
+      cx = pin.view.x * W; cy = pin.view.y * H; cw = pin.view.w * W; ch = pin.view.h * H;
+    } else {
+      // Automatic: ~38% of the drawing's long side around the marker
+      cw = Math.min(W, Math.max(W, H) * frac);
+      ch = cw / aspect;
+      if (ch > H) { ch = H; cw = Math.min(W, ch * aspect); }
+      cx = Math.min(Math.max(0, px - cw / 2), W - cw);
+      cy = Math.min(Math.max(0, py - ch / 2), H - ch);
+    }
+    // Output size: no needless downscaling (keeps text sharp), longest side max 1600 px
+    if (!outW) outW = Math.round(cw * Math.min(1, 1600 / Math.max(cw, ch)));
+    const outH = Math.max(1, Math.round(outW * ch / cw));
     const c = document.createElement('canvas');
     c.width = outW;
     c.height = outH;
@@ -308,7 +315,7 @@ const Drawings = (() => {
     ctx.fillRect(0, 0, outW, outH);
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(img, cx, cy, cw, ch, 0, 0, outW, outH);
-    drawMarker(ctx, (px - cx) / cw * outW, (py - cy) / ch * outH, outW * 0.028);
+    drawMarker(ctx, (px - cx) / cw * outW, (py - cy) / ch * outH, Math.max(outW, outH) * 0.025);
     const dataUrl = c.toDataURL('image/jpeg', 0.85);
     c.width = c.height = 0;
     return { dataUrl, width: outW, height: outH };
@@ -355,7 +362,8 @@ const Drawings = (() => {
           <span style="flex:1"></span>
           ${pin ? '<button type="button" class="btn dark sm" data-act="remove" style="color:#ff8a80">Remove marker</button>' : ''}
         </div>
-        <div class="markup-hint">Tap to place the marker. Pinch or use + / − to zoom, drag to move.</div>
+        <div class="markup-hint">Tap to place the marker. Pinch or + / − to zoom, drag to move.<br>
+          <strong style="color:#fff">The view on screen when you tap Done is what the report shows.</strong></div>
       </div>`;
     document.body.appendChild(el);
     const prevOverflow = document.body.style.overflow;
@@ -430,7 +438,16 @@ const Drawings = (() => {
         return;
       }
       Utils.hideLoading();
-      if (point) {
+      const savedView = pin && pin.drawingId === d.id && pin.view;
+      if (point && savedView) {
+        // Restore exactly the area that was saved for the report
+        fitView();
+        const W = img.naturalWidth, H = img.naturalHeight;
+        scale = Math.min(cssW / (savedView.w * W), cssH / (savedView.h * H));
+        ox = cssW / 2 - (savedView.x + savedView.w / 2) * W * scale;
+        oy = cssH / 2 - (savedView.y + savedView.h / 2) * H * scale;
+        requestDraw();
+      } else if (point) {
         // Start zoomed in on the existing marker
         fitView();
         const sx = ox + point.x * img.naturalWidth * scale, sy = oy + point.y * img.naturalHeight * scale;
@@ -539,10 +556,23 @@ const Drawings = (() => {
           case 'fit': fitView(); break;
           case 'cancel': close(null); break;
           case 'remove': close('remove'); break;
-          case 'done':
+          case 'done': {
             if (!point) { Utils.toast('Tap the drawing to place the marker'); return; }
-            close({ drawingId: current.id, x: point.x, y: point.y });
+            // Save the part of the drawing visible on screen – this is what the report shows
+            const W = img.naturalWidth, H = img.naturalHeight;
+            const x0 = Math.max(0, -ox / scale), y0 = Math.max(0, -oy / scale);
+            const x1 = Math.min(W, (cssW - ox) / scale), y1 = Math.min(H, (cssH - oy) / scale);
+            const px = point.x * W, py = point.y * H;
+            if (x1 <= x0 || y1 <= y0 || px < x0 || px > x1 || py < y0 || py > y1) {
+              Utils.toast('Move the view so the marker is on screen – this view is used in the report');
+              return;
+            }
+            close({
+              drawingId: current.id, x: point.x, y: point.y,
+              view: { x: x0 / W, y: y0 / H, w: (x1 - x0) / W, h: (y1 - y0) / H }
+            });
             break;
+          }
         }
       });
     });

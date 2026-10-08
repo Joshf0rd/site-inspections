@@ -174,9 +174,9 @@ const Snags = (() => {
         pinArea.innerHTML = `
           <div class="label" style="font-size:14px;font-weight:650;margin:2px 0 6px">📍 On drawing: ${Utils.esc(drawing.name)}</div>
           <button type="button" id="btn-pin" style="display:block;width:100%;padding:0;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#fff;cursor:pointer">
-            <img id="pin-preview" alt="Location on drawing" style="display:block;width:100%;min-height:60px">
+            <img id="pin-preview" alt="Location on drawing" style="display:block;width:100%;min-height:60px;max-height:320px;object-fit:contain;background:#fff">
           </button>
-          <div class="small muted" style="margin-top:4px">Tap the plan to move the marker.</div>`;
+          <div class="small muted" style="margin-top:4px">This is how it will appear in the report. Tap to change the marker or the view.</div>`;
         try {
           const img = await Drawings.loadImageFor(pin.drawingId);
           const crop = Drawings.cropAround(img, pin, { outW: 800 });

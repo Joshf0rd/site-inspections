@@ -480,7 +480,9 @@ const Reports = (() => {
 
     // ----- Location on drawing (optional) -----
     if (location) {
-      const w = 140, h = w * location.height / location.width;
+      // Fit the snippet in a 140 x 110 mm box, keeping its shape (it can be wide or tall)
+      let w = 140, h = w * location.height / location.width;
+      if (h > 110) { h = 110; w = h * location.width / location.height; }
       items.push({
         h: 6 + h + 5,
         draw(y) {

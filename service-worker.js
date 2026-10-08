@@ -14,7 +14,7 @@
    >>> "Update" banner.
    ========================================================= */
 
-const CACHE_VERSION = 'v1.3.0';
+const CACHE_VERSION = 'v1.3.1';
 const CACHE_NAME = 'site-inspections-' + CACHE_VERSION;
 
 // The app page is cached as './' (not './index.html'): some hosts, such as

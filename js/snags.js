@@ -75,6 +75,8 @@ const Snags = (() => {
     let numberEdited = isEdit;
     let photoEdits = 0;   // counts mark-up changes, so unsaved markings trigger the "Discard changes?" warning
     let status = snag.status || STATUS.OPEN;
+    let pin = snag.pin || null;   // optional location on a project drawing: { drawingId, x, y }
+    const drawingCount = (await Drawings.listForProject(visit.projectId)).length;
 
     // Suggestions for quick entry (areas & contractors already used in this project)
     const unique = arr => [...new Set(arr.filter(Boolean).map(s => s.trim()))].sort(Utils.naturalCompare);
@@ -113,6 +115,7 @@ const Snags = (() => {
             <input type="text" id="f-area" list="area-list" value="${Utils.esc(snag.area)}" placeholder="e.g. Ground Floor – Electrical Room" autocapitalize="words" autocomplete="off">
             <datalist id="area-list">${areas.map(a => `<option value="${Utils.esc(a)}">`).join('')}</datalist>
           </div>
+          <div id="pin-area"></div>
         </div>
 
         <div class="form-card">
@@ -157,6 +160,40 @@ const Snags = (() => {
     const numberInput = document.getElementById('f-number');
     const gotoCurrent = document.getElementById('btn-goto-current');
     if (gotoCurrent) gotoCurrent.addEventListener('click', () => App.go(`/snag/${snag.carriedForwardSnagId}`));
+
+    // ----- Optional location on a drawing -----
+    const pinArea = document.getElementById('pin-area');
+    async function drawPin() {
+      if (!pin) {
+        pinArea.innerHTML = drawingCount
+          ? `<button type="button" class="btn sm block" id="btn-pin">📍 Mark on drawing</button>`
+          : `<p class="small muted" style="margin:4px 0 0">Tip: add drawings on the project screen to mark the exact location on a plan.</p>`;
+      } else {
+        const drawing = await DB.get('drawings', pin.drawingId);
+        if (!drawing) { pin = null; return drawPin(); }   // drawing was deleted
+        pinArea.innerHTML = `
+          <div class="label" style="font-size:14px;font-weight:650;margin:2px 0 6px">📍 On drawing: ${Utils.esc(drawing.name)}</div>
+          <button type="button" id="btn-pin" style="display:block;width:100%;padding:0;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#fff;cursor:pointer">
+            <img id="pin-preview" alt="Location on drawing" style="display:block;width:100%;min-height:60px">
+          </button>
+          <div class="small muted" style="margin-top:4px">Tap the plan to move the marker.</div>`;
+        try {
+          const img = await Drawings.loadImageFor(pin.drawingId);
+          const crop = Drawings.cropAround(img, pin, { outW: 800 });
+          const preview = document.getElementById('pin-preview');
+          if (preview) preview.src = crop.dataUrl;
+        } catch (e) { /* preview is optional */ }
+      }
+      const btn = document.getElementById('btn-pin');
+      if (btn) btn.addEventListener('click', async () => {
+        const res = await Drawings.pickLocation({ projectId: visit.projectId, pin });
+        if (res === 'remove') pin = null;
+        else if (res) pin = res;
+        else return;
+        drawPin();
+      });
+    }
+    drawPin();
 
     // ----- Category change -> renumber (only while number not manually edited) -----
     numberInput.addEventListener('input', () => { numberEdited = true; });
@@ -314,7 +351,8 @@ const Snags = (() => {
       observation: document.getElementById('f-obs').value.trim(),
       action: document.getElementById('f-action').value.trim(),
       contractor: document.getElementById('f-contractor').value.trim(),
-      status
+      status,
+      pin
     });
     const snapshot = () => JSON.stringify(read()) + photos.map(p => p.id).join(',') + '#' + photoEdits;
     const initial = snapshot();

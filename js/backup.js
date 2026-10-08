@@ -67,6 +67,9 @@ const Backup = (() => {
     if (typeof obj.format !== 'number' || obj.format > FORMAT) fail('This backup was made by a newer version of the app.');
     const data = obj.data;
     if (!data || typeof data !== 'object') fail('Backup contains no data section.');
+    // Backups made before drawings existed (v1.2 and earlier) have no drawing lists
+    if (data.drawings === undefined) data.drawings = [];
+    if (data.drawingImages === undefined) data.drawingImages = [];
     DB.ALL_STORES.forEach(n => {
       if (!Array.isArray(data[n])) fail(`Backup is missing the "${n}" list.`);
     });
@@ -92,6 +95,15 @@ const Backup = (() => {
     data.photos.forEach((p, i) => {
       if (!isStr(p.id) || !snagIds.has(p.snagId)) fail(`Photo #${i + 1} is damaged or has no snag.`);
       if (typeof p.dataUrl !== 'string' || !p.dataUrl.startsWith('data:image/')) fail(`Photo #${i + 1} has no valid image data.`);
+    });
+    const drawingIds = new Set();
+    data.drawings.forEach((d, i) => {
+      if (!isStr(d.id) || !projectIds.has(d.projectId)) fail(`Drawing #${i + 1} is damaged or has no project.`);
+      drawingIds.add(d.id);
+    });
+    data.drawingImages.forEach((d, i) => {
+      if (!isStr(d.id) || !drawingIds.has(d.id)) fail(`Drawing image #${i + 1} belongs to no drawing.`);
+      if (typeof d.dataUrl !== 'string' || !d.dataUrl.startsWith('data:image/')) fail(`Drawing image #${i + 1} has no valid image data.`);
     });
     data.settings.forEach(s => { if (!s || s.key !== 'main') fail('Settings section is damaged.'); });
     return data;

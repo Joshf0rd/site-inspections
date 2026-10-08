@@ -11,6 +11,10 @@
                  createdAt, modifiedAt }
      photos    { id, snagId, visitId, projectId, kind ('issue'|'closeout'),
                  dataUrl (full-size JPEG), width, height, createdAt }
+     drawings  { id, projectId, name, thumb, width, height, sourceName, page, createdAt }
+     drawingImages { id (same as the drawing's id), projectId, dataUrl (JPEG of the drawing) }
+                 – kept separate so lists don't load the large images
+     (a snag may have pin: { drawingId, x, y } with x/y as fractions 0–1)
 
    Full-size photos live in their own store so lists only load small thumbnails.
    Multi-step changes (e.g. deleting a project and everything under it) run in a
@@ -19,8 +23,9 @@
 
 const DB = (() => {
   const DB_NAME = 'site-inspections';
-  const DB_VERSION = 1;
-  const ALL_STORES = ['settings', 'projects', 'visits', 'snags', 'photos'];
+  // Version 2 added the "drawings" and "drawingImages" stores. Upgrading keeps all existing data.
+  const DB_VERSION = 2;
+  const ALL_STORES = ['settings', 'projects', 'visits', 'snags', 'photos', 'drawings', 'drawingImages'];
   let dbPromise = null;
 
   function open() {
@@ -55,6 +60,14 @@ const DB = (() => {
           const s = db.createObjectStore('photos', { keyPath: 'id' });
           s.createIndex('snagId', 'snagId');
           s.createIndex('visitId', 'visitId');
+          s.createIndex('projectId', 'projectId');
+        }
+        if (!db.objectStoreNames.contains('drawings')) {
+          const s = db.createObjectStore('drawings', { keyPath: 'id' });
+          s.createIndex('projectId', 'projectId');
+        }
+        if (!db.objectStoreNames.contains('drawingImages')) {
+          const s = db.createObjectStore('drawingImages', { keyPath: 'id' });
           s.createIndex('projectId', 'projectId');
         }
       };
@@ -116,7 +129,9 @@ const DB = (() => {
 
   // ---------- Cascading deletes ----------
   function deleteProject(projectId) {
-    return run(['projects', 'visits', 'snags', 'photos'], 'readwrite', s => {
+    return run(['projects', 'visits', 'snags', 'photos', 'drawings', 'drawingImages'], 'readwrite', s => {
+      deleteByIndex(s.drawingImages, 'projectId', projectId);
+      deleteByIndex(s.drawings, 'projectId', projectId);
       deleteByIndex(s.photos, 'projectId', projectId);
       deleteByIndex(s.snags, 'projectId', projectId);
       deleteByIndex(s.visits, 'projectId', projectId);

@@ -118,7 +118,7 @@ const Visits = (() => {
             <span class="snag-no">${Utils.esc(s.number || '—')}</span>
             <span class="badge ${closed ? 'closed' : 'open'}">${closed ? 'Closed' : 'Open'}</span>
           </div>
-          <div class="snag-area">${Utils.esc(s.area || 'No area recorded')}</div>
+          <div class="snag-area">${s.pin ? '📍 ' : ''}${Utils.esc(s.area || (s.pin ? 'Marked on drawing' : 'No area recorded'))}</div>
           <div class="snag-obs">${Utils.esc(s.observation || '')}</div>
           ${s.carriedForwardTo ? `<div style="${NOTE_STYLE}">➜ Carried forward to ${Utils.esc(Utils.formatDateShort(s.carriedForwardDate))} visit</div>` : ''}
           ${s.carriedFrom ? `<div style="${NOTE_STYLE}">↩ Brought forward from ${Utils.esc(Utils.formatDateShort(s.carriedFrom.visitDate))} visit</div>` : ''}

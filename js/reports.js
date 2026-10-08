@@ -317,6 +317,7 @@ const Reports = (() => {
     doc.text('SNAG DETAILS', M_LEFT, y + 4);
     y += 9;
 
+    const drawingCache = new Map();   // each drawing image is loaded once per report
     for (let i = 0; i < snags.length; i++) {
       Utils.updateLoading(`Adding snag ${i + 1} of ${snags.length}…`);
       const snag = snags[i];
@@ -326,7 +327,19 @@ const Reports = (() => {
         const rec = await DB.get('photos', meta.id);
         if (rec && rec.dataUrl) photos.push({ ...meta, dataUrl: rec.dataUrl, width: rec.width || meta.width, height: rec.height || meta.height });
       }
-      const items = buildSnagItems(doc, snag, photos, setFont);
+      // Optional location on a drawing: a zoomed snippet of the plan with the marker
+      let location = null;
+      if (snag.pin) {
+        try {
+          if (!drawingCache.has(snag.pin.drawingId)) {
+            const meta = await DB.get('drawings', snag.pin.drawingId);
+            drawingCache.set(snag.pin.drawingId, meta ? { name: meta.name, img: await Drawings.loadImageFor(meta.id) } : null);
+          }
+          const d = drawingCache.get(snag.pin.drawingId);
+          if (d) location = { name: d.name, ...Drawings.cropAround(d.img, snag.pin) };
+        } catch (e) { location = null; }   // a missing drawing never stops the report
+      }
+      const items = buildSnagItems(doc, snag, photos, setFont, location);
       placeItems(items);
       // Let the screen update between snags
       await new Promise(r => setTimeout(r, 0));
@@ -370,7 +383,7 @@ const Reports = (() => {
   // =========================================================
   // One snag -> list of drawable items { h, draw(y), keepWithNext }
   // =========================================================
-  function buildSnagItems(doc, snag, photos, setFont) {
+  function buildSnagItems(doc, snag, photos, setFont, location) {
     const items = [];
     const closed = snag.status === STATUS.CLOSED;
     const statusColor = closed ? C.closed : C.open;
@@ -463,6 +476,25 @@ const Reports = (() => {
           }
         });
       }
+    }
+
+    // ----- Location on drawing (optional) -----
+    if (location) {
+      const w = 140, h = w * location.height / location.width;
+      items.push({
+        h: 6 + h + 5,
+        draw(y) {
+          setFont(7.5, 'bold', C.accent);
+          doc.text('LOCATION ON DRAWING', M_LEFT + 1, y + 4);
+          const labelW = doc.getTextWidth('LOCATION ON DRAWING');
+          setFont(8.5, 'normal', C.muted);
+          doc.text(clean(location.name), M_LEFT + 1 + labelW + 3, y + 4, { maxWidth: CONTENT_W - labelW - 6 });
+          doc.addImage(location.dataUrl, 'JPEG', M_LEFT, y + 6, w, h, 'loc-' + snag.id, 'NONE');
+          doc.setDrawColor(...C.line);
+          doc.setLineWidth(0.2);
+          doc.rect(M_LEFT, y + 6, w, h);
+        }
+      });
     }
 
     // ----- Text sections (label kept with first line) -----

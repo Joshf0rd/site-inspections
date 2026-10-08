@@ -101,6 +101,7 @@ const Projects = (() => {
       };
     }));
 
+    const drawings = await Drawings.listForProject(id);
     const row = (label, value) => value ? `<dt>${label}</dt><dd>${Utils.esc(value)}</dd>` : '';
 
     App.render({
@@ -137,12 +138,30 @@ const Projects = (() => {
                   ${c.carried ? `<span>${c.carried} carried forward</span>` : ''}
                 </div>
               </a>`;
-          }).join('')}`,
+          }).join('')}
+
+        <div class="section-title">Drawings <span>${drawings.length || ''}</span></div>
+        ${drawings.length ? drawings.map(d => `
+          <button type="button" class="card snag-card" data-drawing="${Utils.esc(d.id)}">
+            <img class="snag-thumb" src="${d.thumb}" alt="" style="object-fit:contain;background:#fff">
+            <div class="snag-body">
+              <div class="card-title" style="font-size:16px">${Utils.esc(d.name)}</div>
+              <div class="card-sub">${Utils.esc(d.sourceName || '')}</div>
+            </div>
+          </button>`).join('') : `<p class="small muted" style="margin:0 2px 10px">Optional: add floor plans (PDF or image) to mark exactly where each snag is.</p>`}
+        <button type="button" class="btn block" id="btn-add-drawing">+ Add drawings (PDF or image)</button>`,
       actions: `<button type="button" class="btn primary lg" id="btn-new-visit">+ New Site Visit</button>`
     });
 
     document.getElementById('btn-edit').addEventListener('click', () => App.go(`/project/${id}/edit`));
     document.getElementById('btn-new-visit').addEventListener('click', () => App.go(`/project/${id}/visit/new`));
+    document.getElementById('btn-add-drawing').addEventListener('click', async () => {
+      if (await Drawings.addDrawings(id)) renderDetail(id);
+    });
+    document.querySelectorAll('[data-drawing]').forEach(btn => btn.addEventListener('click', async () => {
+      const d = drawings.find(x => x.id === btn.dataset.drawing);
+      if (d && await Drawings.manage(d)) renderDetail(id);
+    }));
   }
 
   // ---------- New / edit project ----------

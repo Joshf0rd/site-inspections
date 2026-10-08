@@ -9,17 +9,19 @@
    Project data is NOT handled here – it lives in IndexedDB.
 
    >>> WHEN YOU CHANGE ANY APP FILE AND RE-UPLOAD IT, increase
-   >>> CACHE_VERSION below (e.g. 'v1.0.1'). That is how phones
+   >>> CACHE_VERSION below (e.g. 'v1.0.2'). That is how phones
    >>> learn there is a new version. The app will then show an
    >>> "Update" banner.
    ========================================================= */
 
-const CACHE_VERSION = 'v1.0.0';
+const CACHE_VERSION = 'v1.0.1';
 const CACHE_NAME = 'site-inspections-' + CACHE_VERSION;
 
+// The app page is cached as './' (not './index.html'): some hosts, such as
+// Cloudflare Pages, redirect /index.html to /, and Safari refuses to show a
+// page that a service worker serves from a redirected response.
 const APP_FILES = [
   './',
-  './index.html',
   './manifest.json',
   './css/styles.css',
   './js/lib/jspdf.umd.min.js',
@@ -37,14 +39,27 @@ const APP_FILES = [
   './icons/apple-touch-icon.png'
 ];
 
+/**
+ * If the server answered via a redirect, copy the response into a fresh
+ * one without the "redirected" flag (Safari rejects flagged responses).
+ */
+async function cleanResponse(res) {
+  if (!res.redirected) return res;
+  const body = await res.blob();
+  return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers });
+}
+
 // Download all app files. If any file fails, installation fails and the
 // previous working version stays in charge (no half-installed app).
 self.addEventListener('install', event => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then(cache =>
-      cache.addAll(APP_FILES.map(url => new Request(url, { cache: 'reload' })))
-    )
-  );
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE_NAME);
+    for (const url of APP_FILES) {
+      const res = await fetch(new Request(url, { cache: 'reload' }));
+      if (!res.ok) throw new Error('Could not download ' + url + ' (' + res.status + ')');
+      await cache.put(url, await cleanResponse(res));
+    }
+  })());
   // Do not skipWaiting automatically: the page asks the user first (see app.js).
 });
 
@@ -77,23 +92,23 @@ self.addEventListener('fetch', event => {
   if (IS_LOCAL_DEV) {
     event.respondWith(
       fetch(req).then(res => {
-        if (res.ok && APP_FILES.includes('./' + url.pathname.replace(/^\//, ''))) {
+        if (res.ok && !res.redirected && APP_FILES.includes('./' + url.pathname.replace(/^\//, ''))) {
           const copy = res.clone();
           caches.open(CACHE_NAME).then(c => c.put(req, copy));
         }
         return res;
-      }).catch(() => caches.match(req.mode === 'navigate' ? './index.html' : req, { ignoreSearch: true }))
+      }).catch(() => caches.match(req.mode === 'navigate' ? './' : req, { ignoreSearch: true }))
     );
     return;
   }
 
-  // Opening the app (any page navigation) -> serve the cached index.html
+  // Opening the app (any page navigation) -> serve the cached app page
   if (req.mode === 'navigate') {
-    event.respondWith(
-      caches.match('./index.html', { cacheName: CACHE_NAME })
-        .then(cached => cached || fetch(req))
-        .catch(() => caches.match('./index.html'))
-    );
+    event.respondWith((async () => {
+      const cached = await caches.match('./', { cacheName: CACHE_NAME });
+      if (cached && !cached.redirected) return cached;
+      return cleanResponse(await fetch(req));
+    })());
     return;
   }
 

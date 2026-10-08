@@ -1,0 +1,104 @@
+/* =========================================================
+   service-worker.js – makes the app work offline.
+
+   Strategy: "precache + cache-first" for the app's own files.
+   On install, every file the app needs (HTML, CSS, JS, jsPDF,
+   icons) is downloaded into a cache. After that, the app loads
+   from the cache, with or without internet.
+
+   Project data is NOT handled here – it lives in IndexedDB.
+
+   >>> WHEN YOU CHANGE ANY APP FILE AND RE-UPLOAD IT, increase
+   >>> CACHE_VERSION below (e.g. 'v1.0.1'). That is how phones
+   >>> learn there is a new version. The app will then show an
+   >>> "Update" banner.
+   ========================================================= */
+
+const CACHE_VERSION = 'v1.0.0';
+const CACHE_NAME = 'site-inspections-' + CACHE_VERSION;
+
+const APP_FILES = [
+  './',
+  './index.html',
+  './manifest.json',
+  './css/styles.css',
+  './js/lib/jspdf.umd.min.js',
+  './js/utils.js',
+  './js/db.js',
+  './js/settings.js',
+  './js/backup.js',
+  './js/projects.js',
+  './js/visits.js',
+  './js/snags.js',
+  './js/reports.js',
+  './js/app.js',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
+  './icons/apple-touch-icon.png'
+];
+
+// Download all app files. If any file fails, installation fails and the
+// previous working version stays in charge (no half-installed app).
+self.addEventListener('install', event => {
+  event.waitUntil(
+    caches.open(CACHE_NAME).then(cache =>
+      cache.addAll(APP_FILES.map(url => new Request(url, { cache: 'reload' })))
+    )
+  );
+  // Do not skipWaiting automatically: the page asks the user first (see app.js).
+});
+
+// Remove caches from older versions.
+self.addEventListener('activate', event => {
+  event.waitUntil(
+    caches.keys()
+      .then(keys => Promise.all(
+        keys.filter(k => k.startsWith('site-inspections-') && k !== CACHE_NAME).map(k => caches.delete(k))
+      ))
+      .then(() => self.clients.claim())
+  );
+});
+
+// The page sends this when the user taps "Update".
+self.addEventListener('message', event => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
+});
+
+// When testing on your own PC (localhost), always try the network first so
+// code edits show up on refresh; the cache is still used if the server is off.
+const IS_LOCAL_DEV = ['localhost', '127.0.0.1'].includes(self.location.hostname);
+
+self.addEventListener('fetch', event => {
+  const req = event.request;
+  if (req.method !== 'GET') return;
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;   // only our own files
+
+  if (IS_LOCAL_DEV) {
+    event.respondWith(
+      fetch(req).then(res => {
+        if (res.ok && APP_FILES.includes('./' + url.pathname.replace(/^\//, ''))) {
+          const copy = res.clone();
+          caches.open(CACHE_NAME).then(c => c.put(req, copy));
+        }
+        return res;
+      }).catch(() => caches.match(req.mode === 'navigate' ? './index.html' : req, { ignoreSearch: true }))
+    );
+    return;
+  }
+
+  // Opening the app (any page navigation) -> serve the cached index.html
+  if (req.mode === 'navigate') {
+    event.respondWith(
+      caches.match('./index.html', { cacheName: CACHE_NAME })
+        .then(cached => cached || fetch(req))
+        .catch(() => caches.match('./index.html'))
+    );
+    return;
+  }
+
+  // App files -> cache first, network as a fallback
+  event.respondWith(
+    caches.match(req, { ignoreSearch: true }).then(cached => cached || fetch(req))
+  );
+});

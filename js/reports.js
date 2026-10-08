@@ -313,9 +313,12 @@ const Reports = (() => {
     // PAGE 2+: snag details
     // =====================================================
     newPage();
-    setFont(11, 'bold', C.accent);
-    doc.text('SNAG DETAILS', M_LEFT, y + 4);
-    y += 9;
+    const HEADING_H = 9;
+    const drawSnagDetailsHeading = () => {
+      setFont(11, 'bold', C.accent);
+      doc.text('SNAG DETAILS', M_LEFT, y + 4);
+      y += HEADING_H;
+    };
 
     const drawingCache = new Map();   // each drawing image is loaded once per report
     for (let i = 0; i < snags.length; i++) {
@@ -340,6 +343,14 @@ const Reports = (() => {
         } catch (e) { location = null; }   // a missing drawing never stops the report
       }
       const items = buildSnagItems(doc, snag, photos, setFont, location);
+      if (i === 0) {
+        // The "SNAG DETAILS" heading shares a page with the first snag. If the first
+        // snag fits on a page only WITHOUT the heading, leave the heading out rather
+        // than printing it alone on an otherwise blank page.
+        const fullPage = CONTENT_BOTTOM - CONTENT_TOP;
+        const snagH = fitHeight(items);
+        if (!(snagH <= fullPage && snagH + HEADING_H > fullPage)) drawSnagDetailsHeading();
+      }
       placeItems(items);
       // Let the screen update between snags
       await new Promise(r => setTimeout(r, 0));
@@ -350,14 +361,22 @@ const Reports = (() => {
      * if it is taller than a page, flow it item by item (never splitting a line
      * or a photo row) and keep the header with the first item after it.
      */
+    /** Height a snag needs on the page – the blank gap after it doesn't have to fit. */
+    function fitHeight(items) {
+      const last = items[items.length - 1];
+      return items.reduce((sum, it) => sum + it.h, 0) - ((last && last.gapAfter) || 0);
+    }
+
     function placeItems(items) {
-      const total = items.reduce((sum, it) => sum + it.h, 0);
+      const total = fitHeight(items);
       const fullPage = CONTENT_BOTTOM - CONTENT_TOP;
-      if (total > spaceLeft()) {
-        if (total <= fullPage || y > CONTENT_TOP + 1) newPage();
-      }
+      // A snag that fits on one page starts on a new page if it doesn't fit here.
+      // A snag taller than a whole page is split anyway, so it simply continues from
+      // here (the checks below still keep each part together sensibly).
+      if (total <= fullPage && total > spaceLeft()) newPage();
       items.forEach((it, idx) => {
-        const needed = it.keepWithNext && items[idx + 1] ? it.h + items[idx + 1].h : it.h;
+        const own = it.h - (it.gapAfter || 0);
+        const needed = it.keepWithNext && items[idx + 1] ? it.h + items[idx + 1].h - (items[idx + 1].gapAfter || 0) : own;
         if (needed > spaceLeft() && y > CONTENT_TOP + 1) newPage();
         it.draw(y);
         y += it.h;
@@ -529,6 +548,8 @@ const Reports = (() => {
     }
     textSection('OBSERVATION', snag.observation);
     textSection('REQUIRED ACTION', snag.action);
+    // The contractor/status row must never sit alone on a page: keep it with the last text line
+    items[items.length - 1].keepWithNext = true;
 
     // ----- Contractor / status / dates row -----
     setFont(9.5, 'normal');
@@ -543,6 +564,7 @@ const Reports = (() => {
     const metaH = 6 + Math.max(contractorLines.length, statusLines.length, 1) * lh(9.5) + 3;
     items.push({
       h: metaH + 8,                 // + spacing before the next snag
+      gapAfter: 8,                  // that spacing doesn't need to fit on the page
       draw(y) {
         doc.setDrawColor(...C.line);
         doc.setLineWidth(0.2);

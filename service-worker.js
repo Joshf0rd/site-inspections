@@ -16,7 +16,7 @@
    >>> so a phone never fetches the new version half-uploaded.
    ========================================================= */
 
-const CACHE_VERSION = 'v1.3.2';
+const CACHE_VERSION = 'v1.4.0';
 const CACHE_NAME = 'site-inspections-' + CACHE_VERSION;
 
 // The app page is cached as './' (not './index.html'): some hosts, such as

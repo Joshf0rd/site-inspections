@@ -12,9 +12,11 @@
    >>> CACHE_VERSION below (e.g. 'v1.0.2'). That is how phones
    >>> learn there is a new version. The app will then show an
    >>> "Update" banner.
+   >>> Upload THIS file LAST, after all the other changed files,
+   >>> so a phone never fetches the new version half-uploaded.
    ========================================================= */
 
-const CACHE_VERSION = 'v1.3.1';
+const CACHE_VERSION = 'v1.3.2';
 const CACHE_NAME = 'site-inspections-' + CACHE_VERSION;
 
 // The app page is cached as './' (not './index.html'): some hosts, such as

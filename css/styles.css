@@ -357,6 +357,34 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .spinner { width: 34px; height: 34px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* ---------- Photo mark-up editor (full screen) ---------- */
+.markup {
+  position: fixed; inset: 0; z-index: 90;      /* below dialogs (100) so "Discard?" shows on top */
+  background: #111; color: #fff;
+  display: flex; flex-direction: column;
+  padding-top: var(--safe-top);
+}
+.markup-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; }
+.markup-title { font-weight: 650; font-size: 16px; }
+.markup-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+.markup-stage canvas {
+  display: block; border-radius: 4px;
+  touch-action: none;                           /* drawing must not scroll or zoom the page */
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+.markup-tools {
+  background: #1c1c1e; padding: 12px 16px calc(12px + var(--safe-bottom));
+  display: flex; flex-direction: column; gap: 10px;
+}
+.markup-row { display: flex; align-items: center; gap: 10px; }
+.markup .segmented { background: #2c2c2e; border-color: #48484a; }
+.markup .segmented button { color: #d1d1d6; border-right-color: #48484a; }
+.markup .segmented button.active { background: var(--accent); color: #fff; }
+.markup .btn.dark { background: #2c2c2e; border-color: #48484a; color: #fff; }
+.swatch { width: 40px; height: 40px; border-radius: 50%; border: 3px solid #48484a; padding: 0; cursor: pointer; flex: none; }
+.swatch.active { border-color: #fff; box-shadow: 0 0 0 2px var(--accent); }
+.markup-hint { font-size: 13px; color: #a1a1a6; text-align: center; }
+
 /* Settings logo preview */
 .logo-preview { max-width: 220px; max-height: 80px; display: block; margin: 8px 0; border: 1px solid var(--border); border-radius: 6px; padding: 6px; background: #fff; }
 

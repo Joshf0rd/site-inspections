@@ -16,7 +16,7 @@
    ========================================================= */
 
 const App = (() => {
-  const APP_VERSION = '1.3.1';
+  const APP_VERSION = '1.4.0';
 
   const routes = [
     [/^\/?$/, () => Projects.renderList()],

@@ -20,6 +20,7 @@ const Drawings = (() => {
   const QUALITY = 0.85;
   const THUMB_DIM = 240;
   const MAX_PDF_PAGES = 30;   // per import, to protect phone memory
+  const FRAME_ASPECT = 1.6;   // width / height of the report view (report box is 120 x 75 mm)
 
   // ---------- pdf.js loading ----------
   let pdfjsPromise = null;
@@ -46,9 +47,9 @@ const Drawings = (() => {
 
   // ---------- Converting to stored images ----------
   /** Turn a finished canvas into { dataUrl, thumb, width, height } and free its memory. */
-  function canvasToDrawing(canvas) {
+  function canvasToDrawing(canvas, quality = QUALITY) {
     const width = canvas.width, height = canvas.height;
-    const dataUrl = canvas.toDataURL('image/jpeg', QUALITY);
+    const dataUrl = canvas.toDataURL('image/jpeg', quality);
     const scale = THUMB_DIM / Math.max(width, height);
     const t = document.createElement('canvas');
     t.width = Math.max(1, Math.round(width * scale));
@@ -225,6 +226,10 @@ const Drawings = (() => {
       title: 'Drawing',
       bodyHtml: `
         ${rec ? `<div class="photo-viewer"><img src="${rec.dataUrl}" alt=""></div>` : ''}
+        <div class="photo-buttons mt">
+          <button type="button" class="btn sm" data-rotate="left">⟲ Rotate left</button>
+          <button type="button" class="btn sm" data-rotate="right">Rotate right ⟳</button>
+        </div>
         <div class="field mt"><label for="dw-name">Name</label>
           <input type="text" id="dw-name" value="${Utils.esc(drawing.name)}" autocapitalize="words"></div>
         <p class="small muted" style="margin:0">${pinned} snag${pinned === 1 ? '' : 's'} marked on this drawing.</p>`,
@@ -232,9 +237,28 @@ const Drawings = (() => {
         { label: 'Delete', value: 'delete', className: 'danger' },
         { label: 'Save', value: 'save', className: 'primary' }
       ],
+      onOpen: (el, close) => {
+        el.querySelectorAll('[data-rotate]').forEach(b => b.addEventListener('click', () =>
+          close({ action: 'rotate', dir: b.dataset.rotate, name: el.querySelector('#dw-name').value.trim() })));
+      },
       getValue: (el, v) => ({ action: v, name: el.querySelector('#dw-name').value.trim() })
     });
     if (!action) return false;
+    if (action.action === 'rotate') {
+      try {
+        Utils.showLoading('Rotating drawing…');
+        await rotate(drawing, action.dir, action.name);
+      } catch (err) {
+        Utils.hideLoading();
+        await Utils.alert('Drawing not rotated', err.message || String(err));
+        return false;
+      }
+      Utils.hideLoading();
+      // Show the drawing again so it can be checked or rotated further
+      const updated = await DB.get('drawings', drawing.id);
+      await manage(updated);
+      return true;
+    }
     if (action.action === 'save') {
       if (!action.name || action.name === drawing.name) return false;
       await DB.put('drawings', { ...drawing, name: action.name });
@@ -260,6 +284,49 @@ const Drawings = (() => {
     });
     Utils.toast('Drawing deleted');
     return true;
+  }
+
+  /**
+   * Rotate a drawing 90° left or right. Markers (and their saved report views)
+   * on this drawing are rotated with it, so they stay on the same spot.
+   * Everything is saved in one transaction.
+   */
+  async function rotate(drawing, dir, newName) {
+    const img = await loadImageFor(drawing.id);
+    const W = img.naturalWidth, H = img.naturalHeight;
+    const canvas = document.createElement('canvas');
+    canvas.width = H;          // width and height swap
+    canvas.height = W;
+    const ctx = canvas.getContext('2d');
+    if (dir === 'right') { ctx.translate(H, 0); ctx.rotate(Math.PI / 2); }
+    else { ctx.translate(0, W); ctx.rotate(-Math.PI / 2); }
+    ctx.drawImage(img, 0, 0);
+    // Slightly higher quality than on import, so rotating doesn't visibly degrade the drawing
+    const out = canvasToDrawing(canvas, 0.9);
+    const { dataUrl, width, height } = out;
+
+    // Where a point (fractions 0–1) ends up after the rotation
+    const turnPoint = (x, y) => dir === 'right' ? { x: 1 - y, y: x } : { x: y, y: 1 - x };
+    const turnView = v => dir === 'right'
+      ? { x: 1 - (v.y + v.h), y: v.x, w: v.h, h: v.w }
+      : { x: v.y, y: 1 - (v.x + v.w), w: v.h, h: v.w };
+
+    await DB.run(['drawings', 'drawingImages', 'snags'], 'readwrite', s => {
+      s.drawings.put({ ...drawing, name: newName || drawing.name, thumb: out.thumb, width, height });
+      s.drawingImages.put({ id: drawing.id, projectId: drawing.projectId, dataUrl });
+      const req = s.snags.index('projectId').openCursor(IDBKeyRange.only(drawing.projectId));
+      req.onsuccess = () => {
+        const cur = req.result;
+        if (!cur) return;
+        const p = cur.value.pin;
+        if (p && p.drawingId === drawing.id) {
+          const np = { ...p, ...turnPoint(p.x, p.y) };
+          if (p.view) np.view = turnView(p.view);
+          cur.update({ ...cur.value, pin: np });
+        }
+        cur.continue();
+      };
+    });
   }
 
   // ---------- Marker ----------
@@ -338,6 +405,7 @@ const Drawings = (() => {
 
     // View transform in CSS pixels: screen = offset + imagePixel * scale
     let scale = 1, ox = 0, oy = 0, fit = 1;
+    let frame = { x: 0, y: 0, w: 1, h: 1 };   // report frame on screen (set in layout)
 
     const el = document.createElement('div');
     el.className = 'markup';
@@ -363,7 +431,7 @@ const Drawings = (() => {
           ${pin ? '<button type="button" class="btn dark sm" data-act="remove" style="color:#ff8a80">Remove marker</button>' : ''}
         </div>
         <div class="markup-hint">Tap to place the marker. Pinch or + / − to zoom, drag to move.<br>
-          <strong style="color:#fff">The view on screen when you tap Done is what the report shows.</strong></div>
+          <strong style="color:#fff">The area inside the white frame is what the report shows.</strong></div>
       </div>`;
     document.body.appendChild(el);
     const prevOverflow = document.body.style.overflow;
@@ -382,15 +450,21 @@ const Drawings = (() => {
       canvas.style.height = cssH + 'px';
       canvas.width = Math.round(cssW * dpr);
       canvas.height = Math.round(cssH * dpr);
+      // The landscape "report frame": the area inside it is what the report shows.
+      // Its shape matches the report's location box (120 x 75 mm).
+      let fw = cssW - 24, fh = fw / FRAME_ASPECT;
+      if (fh > cssH - 40) { fh = cssH - 40; fw = fh * FRAME_ASPECT; }
+      frame = { x: (cssW - fw) / 2, y: (cssH - fh) / 2, w: fw, h: fh };
       requestDraw();
     }
 
+    /** Show the whole drawing inside the report frame. */
     function fitView() {
       if (!img) return;
-      fit = Math.min(cssW / img.naturalWidth, cssH / img.naturalHeight) * 0.96;
+      fit = Math.min(frame.w / img.naturalWidth, frame.h / img.naturalHeight);
       scale = fit;
-      ox = (cssW - img.naturalWidth * scale) / 2;
-      oy = (cssH - img.naturalHeight * scale) / 2;
+      ox = frame.x + (frame.w - img.naturalWidth * scale) / 2;
+      oy = frame.y + (frame.h - img.naturalHeight * scale) / 2;
       requestDraw();
     }
 
@@ -419,10 +493,23 @@ const Drawings = (() => {
       ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * ox, dpr * oy);
       ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(img, 0, 0);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       if (point) {
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         drawMarker(ctx, ox + point.x * img.naturalWidth * scale, oy + point.y * img.naturalHeight * scale, 15);
       }
+      // Dim everything outside the report frame and outline the frame
+      const f = frame;
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(0, 0, cssW, f.y);
+      ctx.fillRect(0, f.y + f.h, cssW, cssH - f.y - f.h);
+      ctx.fillRect(0, f.y, f.x, f.h);
+      ctx.fillRect(f.x + f.w, f.y, cssW - f.x - f.w, f.h);
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(f.x, f.y, f.w, f.h);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '600 12px -apple-system, "Segoe UI", sans-serif';
+      ctx.fillText('REPORT VIEW', f.x, f.y - 7);
     }
 
     async function showDrawing(d) {
@@ -439,21 +526,22 @@ const Drawings = (() => {
       }
       Utils.hideLoading();
       const savedView = pin && pin.drawingId === d.id && pin.view;
+      const fcx = frame.x + frame.w / 2, fcy = frame.y + frame.h / 2;   // frame centre
       if (point && savedView) {
-        // Restore exactly the area that was saved for the report
+        // Restore the area that was saved for the report, inside the frame
         fitView();
         const W = img.naturalWidth, H = img.naturalHeight;
-        scale = Math.min(cssW / (savedView.w * W), cssH / (savedView.h * H));
-        ox = cssW / 2 - (savedView.x + savedView.w / 2) * W * scale;
-        oy = cssH / 2 - (savedView.y + savedView.h / 2) * H * scale;
+        scale = Math.min(frame.w / (savedView.w * W), frame.h / (savedView.h * H));
+        ox = fcx - (savedView.x + savedView.w / 2) * W * scale;
+        oy = fcy - (savedView.y + savedView.h / 2) * H * scale;
         requestDraw();
       } else if (point) {
         // Start zoomed in on the existing marker
         fitView();
         const sx = ox + point.x * img.naturalWidth * scale, sy = oy + point.y * img.naturalHeight * scale;
         zoomAt(4, sx, sy);
-        ox += cssW / 2 - (ox + point.x * img.naturalWidth * scale);
-        oy += cssH / 2 - (oy + point.y * img.naturalHeight * scale);
+        ox += fcx - (ox + point.x * img.naturalWidth * scale);
+        oy += fcy - (oy + point.y * img.naturalHeight * scale);
       } else {
         fitView();
       }
@@ -551,20 +639,20 @@ const Drawings = (() => {
         const b = e.target.closest('button');
         if (!b) return;
         switch (b.dataset.act) {
-          case 'in': zoomAt(1.6, cssW / 2, cssH / 2); break;
-          case 'out': zoomAt(1 / 1.6, cssW / 2, cssH / 2); break;
+          case 'in': zoomAt(1.6, frame.x + frame.w / 2, frame.y + frame.h / 2); break;
+          case 'out': zoomAt(1 / 1.6, frame.x + frame.w / 2, frame.y + frame.h / 2); break;
           case 'fit': fitView(); break;
           case 'cancel': close(null); break;
           case 'remove': close('remove'); break;
           case 'done': {
             if (!point) { Utils.toast('Tap the drawing to place the marker'); return; }
-            // Save the part of the drawing visible on screen – this is what the report shows
+            // Save the part of the drawing inside the report frame – this is what the report shows
             const W = img.naturalWidth, H = img.naturalHeight;
-            const x0 = Math.max(0, -ox / scale), y0 = Math.max(0, -oy / scale);
-            const x1 = Math.min(W, (cssW - ox) / scale), y1 = Math.min(H, (cssH - oy) / scale);
+            const x0 = Math.max(0, (frame.x - ox) / scale), y0 = Math.max(0, (frame.y - oy) / scale);
+            const x1 = Math.min(W, (frame.x + frame.w - ox) / scale), y1 = Math.min(H, (frame.y + frame.h - oy) / scale);
             const px = point.x * W, py = point.y * H;
             if (x1 <= x0 || y1 <= y0 || px < x0 || px > x1 || py < y0 || py > y1) {
-              Utils.toast('Move the view so the marker is on screen – this view is used in the report');
+              Utils.toast('Move the drawing so the marker is inside the white frame');
               return;
             }
             close({

@@ -442,7 +442,11 @@ const Reports = (() => {
       const perRow = n === 1 ? 1 : (n === 2 || n === 4) ? 2 : 3;
       const gap = 6;
       const cellW = (CONTENT_W - gap * (perRow - 1)) / perRow;
-      const maxH = perRow === 1 ? 95 : perRow === 2 ? 68 : 52;
+      // Photos are a little smaller when a drawing snippet follows, so a typical
+      // snag (photos + plan + text) still fits on one page
+      const maxH = location
+        ? (perRow === 1 ? 75 : perRow === 2 ? 58 : 45)
+        : (perRow === 1 ? 95 : perRow === 2 ? 68 : 52);
       const captionH = 5;
       let closeoutNo = 0, photoNo = 0;
       const labelled = photos.map(p => ({
@@ -480,9 +484,9 @@ const Reports = (() => {
 
     // ----- Location on drawing (optional) -----
     if (location) {
-      // Fit the snippet in a 140 x 110 mm box, keeping its shape (it can be wide or tall)
-      let w = 140, h = w * location.height / location.width;
-      if (h > 110) { h = 110; w = h * location.width / location.height; }
+      // Fit the snippet in a 120 x 75 mm box (the shape of the app's report frame), keeping its proportions
+      let w = 120, h = w * location.height / location.width;
+      if (h > 75) { h = 75; w = h * location.width / location.height; }
       items.push({
         h: 6 + h + 5,
         draw(y) {

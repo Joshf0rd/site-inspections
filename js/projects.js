@@ -13,7 +13,8 @@ const Projects = (() => {
 
     // Counts for each card (cheap index counts, no photos loaded)
     const stats = await Promise.all(projects.map(async p => ({
-      open: await DB.countByIndex('snags', 'projectStatus', [p.id, STATUS.OPEN]),
+      // Snags carried forward to a later visit are counted there, not twice
+      open: (await DB.getAllByIndex('snags', 'projectStatus', [p.id, STATUS.OPEN])).filter(s => !s.carriedForwardTo).length,
       visits: await DB.countByIndex('visits', 'projectId', p.id)
     })));
 
@@ -91,10 +92,14 @@ const Projects = (() => {
     const visits = await DB.getAllByIndex('visits', 'projectId', id);
     // Newest visit first; same date -> most recently created first
     visits.sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || ''));
-    const counts = await Promise.all(visits.map(async v => ({
-      open: await DB.countByIndex('snags', 'visitStatus', [v.id, STATUS.OPEN]),
-      closed: await DB.countByIndex('snags', 'visitStatus', [v.id, STATUS.CLOSED])
-    })));
+    const counts = await Promise.all(visits.map(async v => {
+      const open = await DB.getAllByIndex('snags', 'visitStatus', [v.id, STATUS.OPEN]);
+      return {
+        open: open.length,
+        carried: open.filter(s => s.carriedForwardTo).length,
+        closed: await DB.countByIndex('snags', 'visitStatus', [v.id, STATUS.CLOSED])
+      };
+    }));
 
     const row = (label, value) => value ? `<dt>${label}</dt><dd>${Utils.esc(value)}</dd>` : '';
 
@@ -129,6 +134,7 @@ const Projects = (() => {
                 <div class="card-meta">
                   <span><strong>${total}</strong> snag${total === 1 ? '' : 's'}</span>
                   ${total ? `<span><strong style="color:var(--open)">${c.open}</strong> open / <strong style="color:var(--closed)">${c.closed}</strong> closed</span>` : ''}
+                  ${c.carried ? `<span>${c.carried} carried forward</span>` : ''}
                 </div>
               </a>`;
           }).join('')}`,

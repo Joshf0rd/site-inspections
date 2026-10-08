@@ -88,6 +88,15 @@ const Snags = (() => {
       back: backTo,
       backLabel: 'Cancel',
       body: `
+        ${isEdit && snag.carriedForwardTo ? `
+          <div class="banner">
+            <span>This snag was carried forward to the ${Utils.esc(Utils.formatDate(snag.carriedForwardDate))} visit. Update it there – changes here only affect this earlier record.</span>
+            ${snag.carriedForwardSnagId ? `<button type="button" class="btn sm" id="btn-goto-current">Open</button>` : ''}
+          </div>` : ''}
+        ${isEdit && snag.carriedFrom ? `
+          <div class="banner info">
+            <span>Brought forward from the ${Utils.esc(Utils.formatDate(snag.carriedFrom.visitDate))} visit${snag.previousNumber ? ` (previously ${Utils.esc(snag.previousNumber)})` : ''}. First recorded ${Utils.esc(Utils.formatDate(snag.firstRecorded))}.</span>
+          </div>` : ''}
         <div class="form-card">
           <div class="row">
             <div class="field" style="flex:0 0 38%">
@@ -146,6 +155,8 @@ const Snags = (() => {
     });
 
     const numberInput = document.getElementById('f-number');
+    const gotoCurrent = document.getElementById('btn-goto-current');
+    if (gotoCurrent) gotoCurrent.addEventListener('click', () => App.go(`/snag/${snag.carriedForwardSnagId}`));
 
     // ----- Category change -> renumber (only while number not manually edited) -----
     numberInput.addEventListener('input', () => { numberEdited = true; });

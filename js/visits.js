@@ -23,6 +23,7 @@ const Visits = (() => {
     const state = viewState[id] || (viewState[id] = { filter: 'All', sort: 'number' });
     const openCount = snags.filter(s => s.status === STATUS.OPEN).length;
     const closedCount = snags.length - openCount;
+    const carryable = await findCarryable(visit);
 
     App.render({
       title: visit.title || 'Site visit',
@@ -43,6 +44,12 @@ const Visits = (() => {
             <button type="button" class="btn sm" id="btn-report" ${snags.length ? '' : 'disabled'}>Generate Report</button>
           </div>
         </div>
+
+        ${carryable.length ? `
+          <div class="banner info">
+            <span><strong>${carryable.length} open snag${carryable.length === 1 ? '' : 's'}</strong> from earlier visits can be brought forward to this visit.</span>
+            <button type="button" class="btn sm primary" id="btn-carry">Review</button>
+          </div>` : ''}
 
         <div class="counters">
           <div class="counter"><b>${snags.length}</b><span>Total</span></div>
@@ -84,6 +91,8 @@ const Visits = (() => {
     document.getElementById('btn-add-snag').addEventListener('click', () => App.go(`/visit/${id}/snag/new`));
     document.getElementById('btn-edit').addEventListener('click', () => App.go(`/visit/${id}/edit`));
     document.getElementById('btn-report').addEventListener('click', () => Reports.start(id));
+    const carryBtn = document.getElementById('btn-carry');
+    if (carryBtn) carryBtn.addEventListener('click', () => reviewCarryForward(visit, carryable));
     const filter = document.getElementById('filter');
     if (filter) {
       filter.addEventListener('click', e => {
@@ -97,6 +106,8 @@ const Visits = (() => {
     }
   }
 
+  const NOTE_STYLE = 'font-size:12px;font-weight:600;color:var(--accent);margin-top:4px';
+
   function snagCard(s) {
     const thumb = s.photos && s.photos.length ? s.photos[0].thumb : '';
     const closed = s.status === STATUS.CLOSED;
@@ -109,9 +120,133 @@ const Visits = (() => {
           </div>
           <div class="snag-area">${Utils.esc(s.area || 'No area recorded')}</div>
           <div class="snag-obs">${Utils.esc(s.observation || '')}</div>
+          ${s.carriedForwardTo ? `<div style="${NOTE_STYLE}">➜ Carried forward to ${Utils.esc(Utils.formatDateShort(s.carriedForwardDate))} visit</div>` : ''}
+          ${s.carriedFrom ? `<div style="${NOTE_STYLE}">↩ Brought forward from ${Utils.esc(Utils.formatDateShort(s.carriedFrom.visitDate))} visit</div>` : ''}
         </div>
         ${thumb ? `<img class="snag-thumb" src="${thumb}" alt="">` : `<div class="snag-thumb none">No photo</div>`}
       </a>`;
+  }
+
+  // ---------- Bring forward open snags from earlier visits ----------
+  // The earlier visit keeps its snag unchanged (so its report stays a true record),
+  // but it is marked "carried forward" and no longer counts as open on the project.
+  // A copy – same number, text and photos – is created in this visit to be closed out.
+
+  /** Open snags in earlier visits of the same project that haven't been carried forward yet. */
+  async function findCarryable(visit) {
+    const projectVisits = await DB.getAllByIndex('visits', 'projectId', visit.projectId);
+    const visitsById = Object.fromEntries(projectVisits.map(v => [v.id, v]));
+    const open = await DB.getAllByIndex('snags', 'projectStatus', [visit.projectId, STATUS.OPEN]);
+    return open
+      .filter(s => s.visitId !== visit.id && !s.carriedForwardTo && visitsById[s.visitId]
+        && (visitsById[s.visitId].date || '') <= (visit.date || ''))
+      .map(s => ({ snag: s, fromVisit: visitsById[s.visitId] }))
+      .sort((a, b) => (a.fromVisit.date || '').localeCompare(b.fromVisit.date || '') || Utils.naturalCompare(a.snag.number, b.snag.number));
+  }
+
+  async function reviewCarryForward(visit, carryable) {
+    const selected = await Utils.modal({
+      title: 'Bring forward open snags',
+      message: 'Ticked snags are copied into this visit with their numbers, descriptions and photos, ready to close out. The earlier visits keep their records.',
+      bodyHtml: `<div class="choice carry-list">${carryable.map(({ snag: s, fromVisit: v }) => `
+        <label>
+          <input type="checkbox" value="${Utils.esc(s.id)}" checked>
+          <span><strong>${Utils.esc(s.number)}</strong> · ${Utils.esc(s.area || 'No area')}
+            <span class="small muted" style="display:block;font-weight:400">${Utils.esc(Utils.formatDateShort(v.date))} · ${Utils.esc(v.title || 'Site visit')}</span></span>
+        </label>`).join('')}</div>`,
+      buttons: [
+        { label: 'Cancel', value: null },
+        { label: 'Bring forward', value: 'ok', className: 'primary' }
+      ],
+      getValue: el => Array.from(el.querySelectorAll('.carry-list input:checked')).map(i => i.value)
+    });
+    if (!selected || !selected.length) return;
+    const items = carryable.filter(c => selected.includes(c.snag.id));
+    await carryForward(visit, items);
+    App.go(`/visit/${visit.id}`);
+  }
+
+  async function carryForward(visit, items) {
+    const existing = await DB.getAllByIndex('snags', 'visitId', visit.id);
+    const usedNumbers = new Set(existing.map(s => (s.number || '').toUpperCase()));
+    // All snags in the project – a replacement number must not repeat one used in any visit
+    const projectSnags = await DB.getAllByIndex('snags', 'projectId', visit.projectId);
+    const counters = { ...(visit.counters || {}) };
+    let done = 0;
+    try {
+      for (const { snag: old, fromVisit } of items) {
+        Utils.showLoading(`Bringing forward ${done + 1} of ${items.length}…`);
+
+        // Keep the original number; only if it's already used in this visit, give the
+        // next number not used anywhere in the project (shown as "previously E-001")
+        let number = old.number;
+        let previousNumber = '';
+        if (usedNumbers.has((number || '').toUpperCase())) {
+          previousNumber = old.number;
+          number = Snags.nextNumber({ counters }, projectSnags, categoryPrefix(old.category));
+        }
+
+        // Copy the photos (each visit owns its own photos, so deleting one never affects the other)
+        const now = Utils.nowStamp();
+        const newId = Utils.uid();
+        const newPhotos = [];
+        const newPhotoMeta = [];
+        for (const meta of (old.photos || [])) {
+          const rec = await DB.get('photos', meta.id);
+          if (!rec) continue;
+          const pid = Utils.uid();
+          newPhotos.push({ ...rec, id: pid, snagId: newId, visitId: visit.id, projectId: visit.projectId });
+          newPhotoMeta.push({ ...meta, id: pid });
+        }
+
+        const newSnag = {
+          ...old,
+          id: newId,
+          visitId: visit.id,
+          number,
+          previousNumber,
+          status: STATUS.OPEN,
+          closedDate: '',
+          photos: newPhotoMeta,
+          carriedForwardTo: '',
+          carriedForwardDate: '',
+          carriedForwardSnagId: '',
+          carriedFrom: { snagId: old.id, visitId: fromVisit.id, visitDate: fromVisit.date },
+          firstRecorded: old.firstRecorded || Utils.stampToDate(old.createdAt),
+          createdAt: now,
+          modifiedAt: now
+        };
+        const updatedOld = { ...old, carriedForwardTo: visit.id, carriedForwardDate: visit.date, carriedForwardSnagId: newId };
+
+        // One transaction per snag: the copy and the "carried forward" mark are saved together
+        await DB.run(['snags', 'photos'], 'readwrite', s => {
+          newPhotos.forEach(p => s.photos.put(p));
+          s.snags.put(newSnag);
+          s.snags.put(updatedOld);
+        });
+
+        existing.push(newSnag);
+        projectSnags.push(newSnag);
+        usedNumbers.add(number.toUpperCase());
+        const parsed = Snags.parseNumber(number);
+        if (parsed && (counters[parsed.prefix] || 0) < parsed.num) counters[parsed.prefix] = parsed.num;
+        done++;
+      }
+    } catch (err) {
+      Utils.hideLoading();
+      await Utils.alert('Not all snags brought forward', `${done} of ${items.length} were brought forward before an error occurred:\n${err.message || err}`);
+    } finally {
+      // Make sure new snags in this visit continue numbering after the brought-forward ones
+      const fresh = await DB.get('visits', visit.id);
+      if (fresh) {
+        const merged = { ...(fresh.counters || {}) };
+        Object.keys(counters).forEach(k => { merged[k] = Math.max(merged[k] || 0, counters[k]); });
+        await DB.put('visits', { ...fresh, counters: merged });
+      }
+      await touchProject(visit.projectId);
+      Utils.hideLoading();
+    }
+    if (done === items.length) Utils.toast(`${done} snag${done === 1 ? '' : 's'} brought forward`);
   }
 
   // ---------- New / edit site visit ----------

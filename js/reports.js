@@ -379,7 +379,18 @@ const Reports = (() => {
     const barH = 10;
     setFont(9.5, 'bold');
     const areaLines = doc.splitTextToSize(clean((snag.area || 'Area not recorded').toUpperCase()), CONTENT_W - 4);
-    const headerH = barH + 2 + areaLines.length * lh(9.5) + 3;
+    // Carry-forward history note (e.g. "Brought forward from site visit of 7 October 2026")
+    const historyNotes = [];
+    if (snag.carriedFrom) {
+      historyNotes.push(`Brought forward from site visit of ${Utils.formatDate(snag.carriedFrom.visitDate)}` +
+        (snag.previousNumber ? ` (previously ${snag.previousNumber})` : ''));
+    }
+    if (snag.carriedForwardTo) {
+      historyNotes.push(`Carried forward to site visit of ${Utils.formatDate(snag.carriedForwardDate)}`);
+    }
+    setFont(8.5, 'italic');
+    const noteLines = historyNotes.length ? doc.splitTextToSize(clean(historyNotes.join('. ')), CONTENT_W - 4) : [];
+    const headerH = barH + 2 + areaLines.length * lh(9.5) + noteLines.length * lh(8.5) + 3;
     items.push({
       h: headerH,
       keepWithNext: true,
@@ -405,6 +416,10 @@ const Reports = (() => {
         // area
         setFont(9.5, 'bold', C.text);
         doc.text(areaLines, M_LEFT + 1, y + barH + 2 + lh(9.5) * 0.8);
+        if (noteLines.length) {
+          setFont(8.5, 'italic', C.accent);
+          doc.text(noteLines, M_LEFT + 1, y + barH + 2 + areaLines.length * lh(9.5) + lh(8.5) * 0.8);
+        }
       }
     });
 
@@ -485,7 +500,8 @@ const Reports = (() => {
       ? `CLOSED${snag.closedDate ? ' - ' + Utils.formatDate(snag.closedDate) : ''}`
       : 'OPEN';
     const statusLines = doc.splitTextToSize(statusText, colW - 4);
-    const recorded = Utils.formatDate(Utils.stampToDate(snag.createdAt));
+    // For brought-forward snags this is the date the defect was FIRST recorded
+    const recorded = Utils.formatDate(snag.firstRecorded || Utils.stampToDate(snag.createdAt));
     const metaH = 6 + Math.max(contractorLines.length, statusLines.length, 1) * lh(9.5) + 3;
     items.push({
       h: metaH + 8,                 // + spacing before the next snag

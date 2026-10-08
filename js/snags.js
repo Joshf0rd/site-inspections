@@ -73,6 +73,7 @@ const Snags = (() => {
     let photos = (snag.photos || []).map(p => ({ ...p, isNew: false }));
     const removedPhotoIds = [];
     let numberEdited = isEdit;
+    let photoEdits = 0;   // counts mark-up changes, so unsaved markings trigger the "Discard changes?" warning
     let status = snag.status || STATUS.OPEN;
 
     // Suggestions for quick entry (areas & contractors already used in this project)
@@ -222,20 +223,53 @@ const Snags = (() => {
 
     async function viewPhoto(index) {
       const p = photos[index];
-      let src = p.dataUrl;
-      if (!src) {
+      // Saved photos only have a thumbnail in memory: load the full record once
+      if (!p.dataUrl) {
         const rec = await DB.get('photos', p.id);
-        src = rec ? rec.dataUrl : p.thumb;
+        if (rec) {
+          p.dataUrl = rec.dataUrl;
+          p.originalDataUrl = rec.originalDataUrl || '';
+          p.markup = rec.markup || [];
+          p.createdAt = rec.createdAt;
+        }
       }
+      const src = p.dataUrl || p.thumb;
       const action = await Utils.modal({
         title: `Photo ${index + 1}${p.kind === 'closeout' ? ' (close-out)' : ''}`,
-        bodyHtml: `<div class="photo-viewer"><img src="${src}" alt=""></div>`,
+        bodyHtml: `<div class="photo-viewer"><img src="${src}" alt=""></div>
+          <button type="button" class="btn primary block mt" id="btn-markup">✎ Mark up – arrows &amp; circles</button>`,
         buttons: [
           { label: 'Delete', value: 'delete', className: 'danger' },
           { label: 'Replace', value: 'replace' },
-          { label: 'Close', value: null, className: 'primary' }
-        ]
+          { label: 'Close', value: null }
+        ],
+        onOpen: (modalEl, close) => {
+          modalEl.querySelector('#btn-markup').addEventListener('click', () => close('markup'));
+        }
       });
+      if (action === 'markup') {
+        if (!p.dataUrl) { Utils.alert('Photo not available', 'This photo could not be loaded.'); return; }
+        // Always draw on the original photo, so re-editing never loses quality
+        const base = p.originalDataUrl || p.dataUrl;
+        let res;
+        try {
+          res = await Markup.open({ baseDataUrl: base, shapes: p.markup || [] });
+        } catch (err) {
+          Utils.alert('Mark-up failed', err.message || String(err));
+          return;
+        }
+        if (!res) return;
+        p.dataUrl = res.dataUrl;
+        p.thumb = res.thumb;
+        p.width = res.width;
+        p.height = res.height;
+        p.markup = res.shapes;
+        p.originalDataUrl = res.shapes.length ? base : '';
+        if (!p.isNew) p.changed = true;
+        photoEdits++;
+        drawPhotos();
+        return;
+      }
       if (action === 'delete') {
         const ok = await Utils.confirm({ title: 'Remove this photo?', message: 'The photo is removed when you save the snag.', confirmLabel: 'Remove', danger: true });
         if (!ok) return;
@@ -271,7 +305,7 @@ const Snags = (() => {
       contractor: document.getElementById('f-contractor').value.trim(),
       status
     });
-    const snapshot = () => JSON.stringify(read()) + photos.map(p => p.id).join(',');
+    const snapshot = () => JSON.stringify(read()) + photos.map(p => p.id).join(',') + '#' + photoEdits;
     const initial = snapshot();
     App.setDirtyCheck(() => snapshot() !== initial);
 
@@ -311,14 +345,20 @@ const Snags = (() => {
           visitId,
           projectId: visit.projectId,
           closedDate,
-          photos: photos.map(p => ({ id: p.id, kind: p.kind, thumb: p.thumb, width: p.width, height: p.height })),
+          photos: photos.map(p => ({
+            id: p.id, kind: p.kind, thumb: p.thumb, width: p.width, height: p.height,
+            marked: !!(p.markup && p.markup.length)
+          })),
           createdAt: isEdit ? snag.createdAt : now,
           modifiedAt: now
         };
 
-        const newPhotos = photos.filter(p => p.isNew).map(p => ({
+        // New photos, plus existing photos whose markings changed, are written to the database
+        const newPhotos = photos.filter(p => p.isNew || p.changed).map(p => ({
           id: p.id, snagId: id, visitId, projectId: visit.projectId, kind: p.kind,
-          dataUrl: p.dataUrl, width: p.width, height: p.height, createdAt: now
+          dataUrl: p.dataUrl, width: p.width, height: p.height,
+          markup: p.markup || [], originalDataUrl: p.originalDataUrl || '',
+          createdAt: p.createdAt || now
         }));
 
         // Move the visit's counter forward so numbers are never reused

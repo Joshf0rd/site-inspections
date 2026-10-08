@@ -14,7 +14,7 @@
    >>> "Update" banner.
    ========================================================= */
 
-const CACHE_VERSION = 'v1.0.1';
+const CACHE_VERSION = 'v1.1.0';
 const CACHE_NAME = 'site-inspections-' + CACHE_VERSION;
 
 // The app page is cached as './' (not './index.html'): some hosts, such as
@@ -31,6 +31,7 @@ const APP_FILES = [
   './js/backup.js',
   './js/projects.js',
   './js/visits.js',
+  './js/markup.js',
   './js/snags.js',
   './js/reports.js',
   './js/app.js',

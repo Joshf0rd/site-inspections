@@ -12,6 +12,8 @@
    ========================================================= */
 
 const Reports = (() => {
+  let lastFormat = 'pdf';   // remembers PDF / Word choice while the app is open
+
   // ---------- Page geometry ----------
   const PAGE_W = 210, PAGE_H = 297;
   const M_LEFT = 15, M_RIGHT = 15;
@@ -61,18 +63,32 @@ const Reports = (() => {
     const nOpen = allSnags.filter(s => s.status === STATUS.OPEN).length;
     const nClosed = allSnags.length - nOpen;
 
-    const scope = await Utils.choose({
+    const choice = await Utils.modal({
       title: 'Generate report',
-      message: 'Which snags should be included?',
-      options: [
-        { value: 'all', label: `All snags (${allSnags.length})` },
-        { value: 'open', label: `Open snags only (${nOpen})` },
-        { value: 'closed', label: `Closed snags only (${nClosed})` }
+      bodyHtml: `
+        <div class="label" style="font-weight:650;margin-bottom:6px">Which snags?</div>
+        <div class="choice">
+          <label><input type="radio" name="rep-scope" value="all" checked> All snags (${allSnags.length})</label>
+          <label><input type="radio" name="rep-scope" value="open"> Open snags only (${nOpen})</label>
+          <label><input type="radio" name="rep-scope" value="closed"> Closed snags only (${nClosed})</label>
+        </div>
+        <div class="label" style="font-weight:650;margin:14px 0 6px">Format</div>
+        <div class="choice">
+          <label><input type="radio" name="rep-format" value="pdf" ${lastFormat === 'pdf' ? 'checked' : ''}> PDF – ready to issue</label>
+          <label><input type="radio" name="rep-format" value="docx" ${lastFormat === 'docx' ? 'checked' : ''}> Word (.docx) – editable</label>
+        </div>`,
+      buttons: [
+        { label: 'Cancel', value: null },
+        { label: 'Generate', value: 'ok', className: 'primary' }
       ],
-      initial: 'all',
-      confirmLabel: 'Generate PDF'
+      getValue: el => ({
+        scope: el.querySelector('input[name="rep-scope"]:checked').value,
+        format: el.querySelector('input[name="rep-format"]:checked').value
+      })
     });
-    if (!scope) return;
+    if (!choice) return;
+    const { scope, format } = choice;
+    lastFormat = format;
 
     const snags = allSnags.filter(s =>
       scope === 'all' || (scope === 'open' ? s.status === STATUS.OPEN : s.status === STATUS.CLOSED));
@@ -83,10 +99,17 @@ const Reports = (() => {
     Snags.sortSnags(snags, 'number');
 
     let blob, fileName;
+    const totals = { all: allSnags.length, open: nOpen, closed: nClosed };
     try {
-      Utils.showLoading('Generating PDF…');
-      blob = await buildPdf({ project, visit, snags, scope, totals: { all: allSnags.length, open: nOpen, closed: nClosed } });
-      fileName = makeFileName(project, visit, scope);
+      if (format === 'docx') {
+        Utils.showLoading('Generating Word document…');
+        blob = await WordReport.build({ project, visit, snags, scope, totals });
+        fileName = makeFileName(project, visit, scope, 'docx');
+      } else {
+        Utils.showLoading('Generating PDF…');
+        blob = await buildPdf({ project, visit, snags, scope, totals });
+        fileName = makeFileName(project, visit, scope);
+      }
     } catch (err) {
       console.error(err);
       Utils.hideLoading();
@@ -101,12 +124,43 @@ const Reports = (() => {
     });
   }
 
-  /** e.g. WCE-2026-014_Electrical_Snag_Report_2026-10-07.pdf */
-  function makeFileName(project, visit, scope) {
+  /** e.g. WCE-2026-014_Electrical_Snag_Report_2026-10-07.pdf (or .docx) */
+  function makeFileName(project, visit, scope, ext = 'pdf') {
     const ref = Utils.safeFileName(project.number || project.name);
     const disc = Utils.safeFileName(visit.discipline || 'Site');
     const scopePart = scope === 'open' ? '_Open' : scope === 'closed' ? '_Closed' : '';
-    return `${ref}_${disc}_Snag_Report${scopePart}_${visit.date}.pdf`;
+    return `${ref}_${disc}_Snag_Report${scopePart}_${visit.date}.${ext}`;
+  }
+
+  /**
+   * Load what a snag needs for a report: its full-size photos and (if marked)
+   * the drawing snippet. Shared by the PDF and Word reports.
+   * `drawingCache` (a Map) avoids loading the same drawing twice per report.
+   */
+  async function loadSnagMedia(snag, drawingCache) {
+    const photos = [];
+    for (const meta of (snag.photos || [])) {
+      const rec = await DB.get('photos', meta.id);
+      if (rec && rec.dataUrl) photos.push({ ...meta, dataUrl: rec.dataUrl, width: rec.width || meta.width, height: rec.height || meta.height });
+    }
+    let location = null;
+    if (snag.pin) {
+      try {
+        if (!drawingCache.has(snag.pin.drawingId)) {
+          const meta = await DB.get('drawings', snag.pin.drawingId);
+          drawingCache.set(snag.pin.drawingId, meta ? { name: meta.name, img: await Drawings.loadImageFor(meta.id) } : null);
+        }
+        const d = drawingCache.get(snag.pin.drawingId);
+        if (d) location = { name: d.name, ...Drawings.cropAround(d.img, snag.pin) };
+      } catch (e) { location = null; }   // a missing drawing never stops the report
+    }
+    return { photos, location };
+  }
+
+  /** "Photo 1", "Photo 2", "Close-out photo 1"… */
+  function photoCaptions(photos) {
+    let closeoutNo = 0, photoNo = 0;
+    return photos.map(p => p.kind === 'closeout' ? `Close-out photo ${++closeoutNo}` : `Photo ${++photoNo}`);
   }
 
   // =========================================================
@@ -324,24 +378,8 @@ const Reports = (() => {
     for (let i = 0; i < snags.length; i++) {
       Utils.updateLoading(`Adding snag ${i + 1} of ${snags.length}…`);
       const snag = snags[i];
-      // Load full-size photos for this snag only (keeps memory use low)
-      const photos = [];
-      for (const meta of (snag.photos || [])) {
-        const rec = await DB.get('photos', meta.id);
-        if (rec && rec.dataUrl) photos.push({ ...meta, dataUrl: rec.dataUrl, width: rec.width || meta.width, height: rec.height || meta.height });
-      }
-      // Optional location on a drawing: a zoomed snippet of the plan with the marker
-      let location = null;
-      if (snag.pin) {
-        try {
-          if (!drawingCache.has(snag.pin.drawingId)) {
-            const meta = await DB.get('drawings', snag.pin.drawingId);
-            drawingCache.set(snag.pin.drawingId, meta ? { name: meta.name, img: await Drawings.loadImageFor(meta.id) } : null);
-          }
-          const d = drawingCache.get(snag.pin.drawingId);
-          if (d) location = { name: d.name, ...Drawings.cropAround(d.img, snag.pin) };
-        } catch (e) { location = null; }   // a missing drawing never stops the report
-      }
+      // Full-size photos and drawing snippet for this snag only (keeps memory use low)
+      const { photos, location } = await loadSnagMedia(snag, drawingCache);
       const items = buildSnagItems(doc, snag, photos, setFont, location);
       if (i === 0) {
         // The "SNAG DETAILS" heading shares a page with the first snag. If the first
@@ -467,11 +505,8 @@ const Reports = (() => {
         ? (perRow === 1 ? 75 : perRow === 2 ? 58 : 45)
         : (perRow === 1 ? 95 : perRow === 2 ? 68 : 52);
       const captionH = 5;
-      let closeoutNo = 0, photoNo = 0;
-      const labelled = photos.map(p => ({
-        ...p,
-        caption: p.kind === 'closeout' ? `Close-out photo ${++closeoutNo}` : `Photo ${++photoNo}`
-      }));
+      const captions = photoCaptions(photos);
+      const labelled = photos.map((p, i) => ({ ...p, caption: captions[i] }));
       for (let r = 0; r < n; r += perRow) {
         const row = labelled.slice(r, r + perRow).map(p => {
           const ratio = (p.width && p.height) ? p.width / p.height : 4 / 3;
@@ -591,5 +626,5 @@ const Reports = (() => {
     return items;
   }
 
-  return { start, buildPdf, makeFileName };
+  return { start, buildPdf, makeFileName, loadSnagMedia, photoCaptions };
 })();
